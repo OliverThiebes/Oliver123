@@ -6,6 +6,7 @@ from typing import Dict, List, Tuple
 from datetime import datetime
 
 import pandas as pd
+from pandas.errors import EmptyDataError
 import streamlit as st
 from openpyxl.styles import PatternFill
 from openpyxl.formatting.rule import FormulaRule
@@ -90,23 +91,28 @@ def read_google_ads_csv_bytes(raw: bytes) -> Tuple[pd.DataFrame, Dict[str, objec
         csv.field_size_limit(2**31 - 1)
 
     skip = 2 if header_row is None else header_row
-    df = pd.read_csv(
-        StringIO(text),
-        sep=delimiter,
-        skiprows=skip,
-        dtype=str,
-        engine="python",
-        on_bad_lines="skip",
-    )
+    try:
+        df = pd.read_csv(
+            StringIO(text),
+            sep=delimiter,
+            skiprows=skip,
+            dtype=str,
+            engine="python",
+            on_bad_lines="skip",
+        )
+    except EmptyDataError:
+        df = pd.DataFrame()
 
     # Spalten bereinigen
-    df.columns = [c.strip() for c in df.columns]
+    if not df.empty:
+        df.columns = [c.strip() for c in df.columns]
     meta = {
         "delimiter": delimiter,
         "header_row": header_row,
         "skiprows": skip,
         "columns": list(df.columns),
         "line_count": len(lines),
+        "head_lines": lines[:10],
     }
     return df, meta
 
@@ -418,6 +424,8 @@ if uploaded_files:
                         }
                     )
                     st.write("Spalten:", meta["columns"])
+                    st.write("Erste 10 Zeilen (roh):")
+                    st.code("\n".join(meta["head_lines"]))
                     st.dataframe(df.head(5), use_container_width=True)
                 out_df, term_stats = transform_to_ngram_table(
                     df,
