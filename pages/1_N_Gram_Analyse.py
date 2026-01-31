@@ -54,7 +54,7 @@ def sniff_delimiter(sample: str) -> str:
         return ";"
 
 
-def read_google_ads_csv_bytes(raw: bytes) -> pd.DataFrame:
+def read_google_ads_csv_bytes(raw: bytes) -> Tuple[pd.DataFrame, Dict[str, object]]:
     """
     Google Ads CSV hat oft 2 Info-Zeilen am Anfang.
     Überschriften stehen laut dir in Zeile 3.
@@ -101,7 +101,14 @@ def read_google_ads_csv_bytes(raw: bytes) -> pd.DataFrame:
 
     # Spalten bereinigen
     df.columns = [c.strip() for c in df.columns]
-    return df
+    meta = {
+        "delimiter": delimiter,
+        "header_row": header_row,
+        "skiprows": skip,
+        "columns": list(df.columns),
+        "line_count": len(lines),
+    }
+    return df, meta
 
 
 def _parse_number_de(t: str) -> float:
@@ -380,6 +387,7 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
+    debug = st.checkbox("Debug-Ansicht anzeigen")
     run = st.button("Analyse starten")
     if run:
         progress = st.progress(0)
@@ -398,7 +406,19 @@ if uploaded_files:
                     part = (done / total) / len(uploaded_files) if total else 0
                     progress.progress(min(base + part, 1.0))
 
-                df = read_google_ads_csv_bytes(up.getvalue())
+                df, meta = read_google_ads_csv_bytes(up.getvalue())
+                if debug:
+                    st.write(f"Debug: {up.name}")
+                    st.write(
+                        {
+                            "delimiter": meta["delimiter"],
+                            "header_row": meta["header_row"],
+                            "skiprows": meta["skiprows"],
+                            "line_count": meta["line_count"],
+                        }
+                    )
+                    st.write("Spalten:", meta["columns"])
+                    st.dataframe(df.head(5), use_container_width=True)
                 out_df, term_stats = transform_to_ngram_table(
                     df,
                     progress_cb=progress_cb,
