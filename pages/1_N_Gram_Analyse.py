@@ -368,26 +368,46 @@ if uploaded_files:
         date_prefix = datetime.now().strftime("%Y%m%d")
         out_name = f"{date_prefix}_JHPS_N-Gram.xlsx"
 
-        out_buf = io.BytesIO()
-        sheets_written = 0
-        with pd.ExcelWriter(out_buf, engine="openpyxl") as writer:
-            for idx, up in enumerate(uploaded_files, start=1):
-                try:
-                    status.write(f"Verarbeite Datei {idx}/{len(uploaded_files)}: {up.name}")
+        exports: List[Tuple[str, pd.DataFrame, Dict[str, Dict[str, float]]]] = []
+        for idx, up in enumerate(uploaded_files, start=1):
+            try:
+                status.write(f"Verarbeite Datei {idx}/{len(uploaded_files)}: {up.name}")
 
-                    def progress_cb(done: int, total: int, label: str) -> None:
-                        base = (idx - 1) / len(uploaded_files)
-                        part = (done / total) / len(uploaded_files) if total else 0
-                        progress.progress(min(base + part, 1.0))
+                def progress_cb(done: int, total: int, label: str) -> None:
+                    base = (idx - 1) / len(uploaded_files)
+                    part = (done / total) / len(uploaded_files) if total else 0
+                    progress.progress(min(base + part, 1.0))
 
-                    df = read_google_ads_csv_bytes(up.getvalue())
-                    out_df, term_stats = transform_to_ngram_table(
-                        df,
-                        progress_cb=progress_cb,
-                        label=up.name,
+                df = read_google_ads_csv_bytes(up.getvalue())
+                out_df, term_stats = transform_to_ngram_table(
+                    df,
+                    progress_cb=progress_cb,
+                    label=up.name,
+                )
+                export_df = out_df[out_df["cost"] > 0].reset_index(drop=True)
+                if export_df.empty:
+                    st.warning(f"Datei '{up.name}' hat keine exportierbaren Zeilen (Kosten=0).")
+                    continue
+
+                sheet = safe_sheet_name(up.name.rsplit(".", 1)[0])
+                exports.append((sheet, export_df, term_stats))
+            except Exception as e:
+                msg = str(e)
+                if "Fehlende Spalten" in msg:
+                    st.error(
+                        f"Datei '{up.name}' hat nicht die erwarteten Spalten. "
+                        "Bitte prüfe die Überschriften."
                     )
-                    export_df = out_df[out_df["cost"] > 0].reset_index(drop=True)
+                else:
+                    st.error(
+                        f"Datei '{up.name}' konnte nicht verarbeitet werden. "
+                        f"Details: {msg}"
+                    )
 
+        out_buf = io.BytesIO()
+        if exports:
+            with pd.ExcelWriter(out_buf, engine="openpyxl") as writer:
+                for sheet, export_df, term_stats in exports:
                     # Rote Grammata (Kosten>100 & KUR>45%)
                     red_grams = set(
                         export_df.loc[(export_df["cost"] > 100) & (export_df["KUR"] > 0.45), "gram"]
@@ -426,27 +446,12 @@ if uploaded_files:
                     export_df["top_search_terms"] = export_df.apply(build_examples_cell, axis=1)
                     export_df = export_df.drop(columns=["_examples"])
 
-                    sheet = safe_sheet_name(up.name.rsplit(".", 1)[0])
                     export_df.to_excel(writer, index=False, sheet_name=sheet)
-                    sheets_written += 1
-
                     ws = writer.sheets[sheet]
                     apply_number_formats_and_rules(ws, len(export_df))
-                except Exception as e:
-                    msg = str(e)
-                    if "Fehlende Spalten" in msg:
-                        st.error(
-                            f"Datei '{up.name}' hat nicht die erwarteten Spalten. "
-                            "Bitte prüfe die Überschriften."
-                        )
-                    else:
-                        st.error(
-                            f"Datei '{up.name}' konnte nicht verarbeitet werden. "
-                            f"Details: {msg}"
-                        )
 
         progress.progress(1.0)
-        if sheets_written == 0:
+        if not exports:
             status.write("Keine Ausgabedaten erzeugt.")
             st.error(
                 "Es wurde keine Excel-Datei erzeugt, weil keine Datei erfolgreich "
